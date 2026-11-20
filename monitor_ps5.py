@@ -16,6 +16,7 @@ EVENTO_GITHUB = os.environ.get("GITHUB_EVENT_NAME", "")
 
 FUSO_BR = timezone(timedelta(hours=-3))
 AGORA_BR = datetime.now(FUSO_BR)
+ARQUIVO_CONTROLE = "ultimo_boletim.txt"
 
 HEADERS = {
     "User-Agent": (
@@ -53,6 +54,16 @@ PRODUTOS = [
 
 def formatar_reais(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def ler_ultimo_boletim():
+    if os.path.exists(ARQUIVO_CONTROLE):
+        with open(ARQUIVO_CONTROLE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
+
+def salvar_ultimo_boletim(chave_hora):
+    with open(ARQUIVO_CONTROLE, "w", encoding="utf-8") as f:
+        f.write(chave_hora)
 
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -176,11 +187,14 @@ if __name__ == "__main__":
     blocos_email_urgente = []
     resumo_status = []
 
-    # Boletim de 1 em 1 hora das 06h até as 00h (Brasília) ou em disparos manuais
+    chave_hora_atual = AGORA_BR.strftime("%Y-%m-%d-%H")
+    ultimo_enviado = ler_ultimo_boletim()
+
+    # Janela das 06h até as 00h (inclusive)
     dentro_janela_boletim = (6 <= AGORA_BR.hour <= 23) or (AGORA_BR.hour == 0)
     enviar_status_periodico = (
         EVENTO_GITHUB == "workflow_dispatch"
-        or (dentro_janela_boletim and AGORA_BR.minute < 10)
+        or (dentro_janela_boletim and chave_hora_atual != ultimo_enviado)
     )
 
     for prod in PRODUTOS:
@@ -243,3 +257,4 @@ if __name__ == "__main__":
             + "\n\n".join(resumo_status)
         )
         enviar_telegram(msg_boletim)
+        salvar_ultimo_boletim(chave_hora_atual)
