@@ -3,26 +3,49 @@ import requests
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-PRECO_ALVO = 3999.99
+
+PRODUTOS = [
+    {
+        "nome": "PS5 Slim com Leitor 1TB",
+        "query": "PlayStation 5 Slim leitor disco 1TB",
+        "preco_min": 2500.00,
+        "preco_max": 3999.99,
+        "obrigatorias": ["slim"],
+        "alguma_de": ["leitor", "disk", "disco"],
+        "proibidas": ["digital"],
+    },
+    {
+        "nome": "LG Dual Inverter Compact 9000 BTUs",
+        "query": "Ar Condicionado LG Dual Inverter Compact 9000 BTU",
+        "preco_min": 1300.00,
+        "preco_max": 1899.99,  # <-- Altere aqui se quiser outro valor máximo
+        "obrigatorias": ["lg", "9000", "compact"],
+        "alguma_de": ["inverter", "dual"],
+        "proibidas": [
+            "usado", "placa", "controle", "evaporadora",
+            "condensadora", "suporte", "12000", "18000", "24000"
+        ],
+    },
+]
 
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": mensagem,
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown",
     }
     requests.post(url, json=payload, timeout=10)
 
-def verificar_preco():
+def verificar_produto(produto):
     url = "https://api.mercadolibre.com/sites/MLB/search"
     params = {
-        "q": "PlayStation 5 Slim leitor disco 1TB",
+        "q": produto["query"],
         "condition": "new",
         "sort": "price_asc",
-        "limit": 10
+        "limit": 15,
     }
-    
+
     resp = requests.get(url, params=params, timeout=15)
     resultados = resp.json().get("results", [])
 
@@ -31,20 +54,26 @@ def verificar_preco():
         preco = float(item.get("price", 99999))
         link = item.get("permalink", "")
 
-        if (
-            preco <= PRECO_ALVO
-            and preco >= 2500
-            and ("slim" in titulo)
-            and ("leitor" in titulo or "disk" in titulo or "disco" in titulo)
-            and ("digital" not in titulo)
-        ):
-            msg = (
-                f"🚨 *ALERTA DE PREÇO PS5 SLIM COM LEITOR!*\n\n"
-                f"📦 *Anúncio:* {item.get('title')}\n"
-                f"💰 *Preço:* R$ {preco:,.2f}\n"
-                f"🔗 [Abrir oferta]({link})"
-            )
-            enviar_telegram(msg)
+        if not (produto["preco_min"] <= preco <= produto["preco_max"]):
+            continue
+
+        if not all(p in titulo for p in produto["obrigatorias"]):
+            continue
+
+        if produto["alguma_de"] and not any(p in titulo for p in produto["alguma_de"]):
+            continue
+
+        if any(p in titulo for p in produto["proibidas"]):
+            continue
+
+        msg = (
+            f"🚨 *ALERTA DE PREÇO: {produto['nome']}*\n\n"
+            f"📦 *Anúncio:* {item.get('title')}\n"
+            f"💰 *Preço:* R$ {preco:,.2f}\n"
+            f"🔗 [Abrir oferta]({link})"
+        )
+        enviar_telegram(msg)
 
 if __name__ == "__main__":
-    verificar_preco()
+    for prod in PRODUTOS:
+        verificar_produto(prod)
