@@ -12,7 +12,6 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 EMAIL_USER = os.environ.get("EMAIL_USER", "")
 EMAIL_PASS = os.environ.get("EMAIL_PASS", "")
 EMAIL_DESTINO = "marcusvaz.df@gmail.com"
-EVENTO_GITHUB = os.environ.get("GITHUB_EVENT_NAME", "")
 
 FUSO_BR = timezone(timedelta(hours=-3))
 AGORA_BR = datetime.now(FUSO_BR)
@@ -190,12 +189,9 @@ if __name__ == "__main__":
     chave_hora_atual = AGORA_BR.strftime("%Y-%m-%d-%H")
     ultimo_enviado = ler_ultimo_boletim()
 
-    # Janela das 06h até as 00h (inclusive)
+    # Janela das 06h até as 00h (inclusive), disparando 1 boletim por hora
     dentro_janela_boletim = (6 <= AGORA_BR.hour <= 23) or (AGORA_BR.hour == 0)
-    enviar_status_periodico = (
-        EVENTO_GITHUB == "workflow_dispatch"
-        or (dentro_janela_boletim and chave_hora_atual != ultimo_enviado)
-    )
+    enviar_status_periodico = dentro_janela_boletim and (chave_hora_atual != ultimo_enviado)
 
     for prod in PRODUTOS:
         ofertas, erro = analisar_produto(prod)
