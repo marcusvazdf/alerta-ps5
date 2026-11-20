@@ -1,8 +1,13 @@
 import os
+import smtplib
+from email.mime.text import MIMEText
 import requests
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+EMAIL_USER = os.environ.get("EMAIL_USER", "")
+EMAIL_PASS = os.environ.get("EMAIL_PASS", "")
+EMAIL_DESTINO = "marcusvaz.df@gmail.com"
 
 PRODUTOS = [
     {
@@ -20,7 +25,7 @@ PRODUTOS = [
         "query": "Ar Condicionado LG Dual Inverter Compact 9000 BTU",
         "preco_min": 1300.00,
         "preco_max": 1899.99,
-        "apenas_frete_gratis": True,  # Ignora anúncios sem frete grátis para Brasília
+        "apenas_frete_gratis": True,
         "obrigatorias": ["lg", "9000", "compact"],
         "alguma_de": ["inverter", "dual"],
         "proibidas": [
@@ -38,6 +43,18 @@ def enviar_telegram(mensagem):
         "parse_mode": "Markdown",
     }
     requests.post(url, json=payload, timeout=10)
+
+def enviar_email(assunto, corpo):
+    if not EMAIL_USER or not EMAIL_PASS:
+        return
+    msg = MIMEText(corpo, "plain", "utf-8")
+    msg["Subject"] = assunto
+    msg["From"] = EMAIL_USER
+    msg["To"] = EMAIL_DESTINO
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as servidor:
+        servidor.login(EMAIL_USER, EMAIL_PASS)
+        servidor.send_message(msg)
 
 def verificar_produto(produto):
     url = "https://api.mercadolibre.com/sites/MLB/search"
@@ -72,16 +89,28 @@ def verificar_produto(produto):
         if any(p in titulo for p in produto["proibidas"]):
             continue
 
-        status_frete = "Grátis ✅" if frete_gratis else "Verificar no anúncio"
+        status_frete = "Grátis" if frete_gratis else "Verificar no anúncio"
 
-        msg = (
+        msg_telegram = (
             f"🚨 *ALERTA DE PREÇO: {produto['nome']}*\n\n"
             f"📦 *Anúncio:* {item.get('title')}\n"
             f"💰 *Preço:* R$ {preco:,.2f}\n"
             f"🚚 *Frete:* {status_frete}\n"
             f"🔗 [Abrir oferta]({link})"
         )
-        enviar_telegram(msg)
+
+        assunto_email = f"🚨 Alerta de Preço: {produto['nome']} por R$ {preco:,.2f}"
+        corpo_email = (
+            f"O robô encontrou uma oferta dentro da sua meta:\n\n"
+            f"Produto: {produto['nome']}\n"
+            f"Anúncio: {item.get('title')}\n"
+            f"Preço: R$ {preco:,.2f}\n"
+            f"Frete: {status_frete}\n"
+            f"Link direto: {link}\n"
+        )
+
+        enviar_telegram(msg_telegram)
+        enviar_email(assunto_email, corpo_email)
 
 if __name__ == "__main__":
     for prod in PRODUTOS:
