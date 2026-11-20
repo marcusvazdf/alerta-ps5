@@ -122,7 +122,6 @@ def analisar_produto(produto):
     html = resp.text
     brutos = []
 
-    # 1. Lê o bloco __NEXT_DATA__ da página
     match_next = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
     if match_next:
         try:
@@ -131,7 +130,6 @@ def analisar_produto(produto):
         except json.JSONDecodeError:
             pass
 
-    # 2. Lê blocos JSON-LD (Schema.org) caso existam
     for match_ld in re.findall(r'<script type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL):
         try:
             dados_ld = json.loads(match_ld)
@@ -178,9 +176,11 @@ if __name__ == "__main__":
     blocos_email_urgente = []
     resumo_status = []
 
+    # Boletim de 1 em 1 hora das 06h até as 00h (Brasília) ou em disparos manuais
+    dentro_janela_boletim = (6 <= AGORA_BR.hour <= 23) or (AGORA_BR.hour == 0)
     enviar_status_periodico = (
         EVENTO_GITHUB == "workflow_dispatch"
-        or (AGORA_BR.hour in (9, 20) and AGORA_BR.minute < 10)
+        or (dentro_janela_boletim and AGORA_BR.minute < 10)
     )
 
     for prod in PRODUTOS:
