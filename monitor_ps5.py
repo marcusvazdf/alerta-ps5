@@ -56,7 +56,7 @@ def enviar_email(assunto, corpo):
         servidor.login(EMAIL_USER, EMAIL_PASS)
         servidor.send_message(msg)
 
-def verificar_produto(produto):
+def verificar_produto(produto, ofertas_email):
     url = "https://api.mercadolibre.com/sites/MLB/search"
     params = {
         "q": produto["query"],
@@ -98,20 +98,32 @@ def verificar_produto(produto):
             f"🚚 *Frete:* {status_frete}\n"
             f"🔗 [Abrir oferta]({link})"
         )
+        enviar_telegram(msg_telegram)
 
-        assunto_email = f"🚨 Alerta de Preço: {produto['nome']} por R$ {preco:,.2f}"
-        corpo_email = (
-            f"O robô encontrou uma oferta dentro da sua meta:\n\n"
+        bloco_email = (
+            f"========================================\n"
             f"Produto: {produto['nome']}\n"
             f"Anúncio: {item.get('title')}\n"
             f"Preço: R$ {preco:,.2f}\n"
             f"Frete: {status_frete}\n"
             f"Link direto: {link}\n"
         )
-
-        enviar_telegram(msg_telegram)
-        enviar_email(assunto_email, corpo_email)
+        ofertas_email.append(bloco_email)
 
 if __name__ == "__main__":
+    ofertas_encontradas = []
     for prod in PRODUTOS:
-        verificar_produto(prod)
+        verificar_produto(prod, ofertas_encontradas)
+
+    if ofertas_encontradas:
+        qtd = len(ofertas_encontradas)
+        assunto_email = (
+            f"🚨 Alerta de Preço: {qtd} "
+            f"{'oferta encontrada' if qtd == 1 else 'ofertas encontradas'}"
+        )
+        corpo_email = (
+            f"O robô encontrou {qtd} "
+            f"{'oferta' if qtd == 1 else 'ofertas'} dentro da sua meta:\n\n"
+            + "\n".join(ofertas_encontradas)
+        )
+        enviar_email(assunto_email, corpo_email)
