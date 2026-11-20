@@ -1,7 +1,10 @@
 from datetime import datetime, timezone, timedelta
+import json
 import os
+import re
 import smtplib
 from email.mime.text import MIMEText
+import urllib.parse
 import requests
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -11,27 +14,34 @@ EMAIL_PASS = os.environ.get("EMAIL_PASS", "")
 EMAIL_DESTINO = "marcusvaz.df@gmail.com"
 EVENTO_GITHUB = os.environ.get("GITHUB_EVENT_NAME", "")
 
-# Horário atual em Brasília (UTC-3)
 FUSO_BR = timezone(timedelta(hours=-3))
 AGORA_BR = datetime.now(FUSO_BR)
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/129.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9",
+}
 
 PRODUTOS = [
     {
         "nome": "PS5 Slim com Leitor 1TB",
-        "query": "PlayStation 5 Slim leitor disco 1TB",
-        "preco_min": 2500.00,
+        "query": "PlayStation 5 Slim 1TB com Leitor",
+        "preco_min": 2800.00,
         "preco_alvo": 3999.99,
-        "apenas_frete_gratis": False,
         "obrigatorias": ["slim"],
-        "alguma_de": ["leitor", "disk", "disco"],
-        "proibidas": ["digital"],
+        "alguma_de": ["leitor", "disk", "disco", "1tb"],
+        "proibidas": ["digital", "controle", "dualsense", "cabo", "suporte", "capa", "jogo"],
     },
     {
         "nome": "LG Dual Inverter Compact 9000 BTUs",
-        "query": "Ar Condicionado LG Dual Inverter Compact 9000 BTU",
-        "preco_min": 1300.00,
+        "query": "Ar Condicionado LG Dual Inverter Compact 9000 BTUs",
+        "preco_min": 1400.00,
         "preco_alvo": 1899.99,
-        "apenas_frete_gratis": True,
         "obrigatorias": ["lg", "9000", "compact"],
         "alguma_de": ["inverter", "dual"],
         "proibidas": [
@@ -66,30 +76,79 @@ def enviar_email(assunto, corpo):
         servidor.login(EMAIL_USER, EMAIL_PASS)
         servidor.send_message(msg)
 
-def analisar_produto(produto):
-    url = "https://api.mercadolibre.com/sites/MLB/search"
-    params = {
-        "q": produto["query"],
-        "condition": "new",
-        "sort": "price_asc",
-        "limit": 30,
-    }
+def extrair_produtos_json(obj, encontrados):
+    if isinstance(obj, dict):
+        nome = obj.get("name") or obj.get("title") or ""
+        preco = None
+        link = obj.get("url") or obj.get("link") or ""
 
-    resp = requests.get(url, params=params, timeout=15)
-    resultados = resp.json().get("results", [])
+        if "price" in obj and isinstance(obj["price"], (int, float, str)):
+            try:
+                preco = float(str(obj["price"]).replace(",", "."))
+            except ValueError:
+                pass
+        elif "lowPrice" in obj:
+            try:
+                preco = float(str(obj["lowPrice"]).replace(",", "."))
+            except ValueError:
+                pass
+        elif isinstance(obj.get("offers"), dict):
+            val = obj["offers"].get("lowPrice") or obj["offers"].get("price")
+            if val is not None:
+                try:
+                    preco = float(str(val).replace(",", "."))
+                except ValueError:
+                    pass
+
+        if nome and preco and preco > 0:
+            if link and link.startswith("/"):
+                link = f"https://www.buscape.com.br{link}"
+            encontrados.append({"titulo": str(nome).strip(), "preco": preco, "link": link})
+
+        for v in obj.values():
+            extrair_produtos_json(v, encontrados)
+    elif isinstance(obj, list):
+        for item in obj:
+            extrair_produtos_json(item, encontrados)
+
+def analisar_produto(produto):
+    q_encoded = urllib.parse.quote(produto["query"])
+    url = f"https://www.buscape.com.br/search?q={q_encoded}"
+
+    resp = requests.get(url, headers=HEADERS, timeout=20)
+    if resp.status_code != 200:
+        return [], f"Erro HTTP {resp.status_code} ao consultar Buscapé"
+
+    html = resp.text
+    brutos = []
+
+    # 1. Lê o bloco __NEXT_DATA__ da página
+    match_next = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if match_next:
+        try:
+            dados = json.loads(match_next.group(1))
+            extrair_produtos_json(dados, brutos)
+        except json.JSONDecodeError:
+            pass
+
+    # 2. Lê blocos JSON-LD (Schema.org) caso existam
+    for match_ld in re.findall(r'<script type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL):
+        try:
+            dados_ld = json.loads(match_ld)
+            extrair_produtos_json(dados_ld, brutos)
+        except json.JSONDecodeError:
+            pass
 
     ofertas_validas = []
+    vistos = set()
 
-    for item in resultados:
-        titulo = item.get("title", "").lower()
-        preco = float(item.get("price", 99999))
-        link = item.get("permalink", "")
-        frete_gratis = item.get("shipping", {}).get("free_shipping", False)
+    for item in brutos:
+        titulo_orig = item["titulo"]
+        titulo = titulo_orig.lower()
+        preco = item["preco"]
+        link = item["link"] or url
 
         if preco < produto["preco_min"]:
-            continue
-
-        if produto.get("apenas_frete_gratis") and not frete_gratis:
             continue
 
         if not all(p in titulo for p in produto["obrigatorias"]):
@@ -101,30 +160,36 @@ def analisar_produto(produto):
         if any(p in titulo for p in produto["proibidas"]):
             continue
 
+        chave = (titulo_orig, preco)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+
         ofertas_validas.append({
-            "titulo": item.get("title"),
+            "titulo": titulo_orig,
             "preco": preco,
             "link": link,
-            "frete_gratis": frete_gratis,
         })
 
-    # Garante ordenação do menor para o maior preço
     ofertas_validas.sort(key=lambda x: x["preco"])
-    return ofertas_validas
+    return ofertas_validas, None
 
 if __name__ == "__main__":
     blocos_email_urgente = []
     resumo_status = []
 
-    # Envia resumo mesmo sem atingir a meta se você rodar manualmente OU às 09h e 20h (Brasília)
     enviar_status_periodico = (
         EVENTO_GITHUB == "workflow_dispatch"
         or (AGORA_BR.hour in (9, 20) and AGORA_BR.minute < 10)
     )
 
     for prod in PRODUTOS:
-        ofertas = analisar_produto(prod)
+        ofertas, erro = analisar_produto(prod)
         alvo = prod["preco_alvo"]
+
+        if erro:
+            resumo_status.append(f"• *{prod['nome']}:* {erro}")
+            continue
 
         if not ofertas:
             resumo_status.append(
@@ -136,18 +201,15 @@ if __name__ == "__main__":
         diferenca = menor["preco"] - alvo
         sinal = "+" if diferenca > 0 else "-"
         diff_formatada = f"{sinal} {formatar_reais(abs(diferenca))}"
-        status_frete = "Grátis" if menor["frete_gratis"] else "Verificar no anúncio"
 
         if diferenca <= 0:
-            # META ATINGIDA OU SUPERADA (diferença negativa ou zero)
             msg_tg = (
                 f"🚨 *META ATINGIDA: {prod['nome']}*\n\n"
                 f"📦 *Anúncio:* {menor['titulo']}\n"
                 f"💰 *Menor preço atual:* {formatar_reais(menor['preco'])}\n"
                 f"🎯 *Seu alvo:* {formatar_reais(alvo)}\n"
                 f"📉 *Diferença:* *{diff_formatada}* (abaixo do alvo!)\n"
-                f"🚚 *Frete:* {status_frete}\n"
-                f"🔗 [Abrir oferta agora]({menor['link']})"
+                f"🔗 [Ver lojas e ofertas]({menor['link']})"
             )
             enviar_telegram(msg_tg)
 
@@ -158,19 +220,16 @@ if __name__ == "__main__":
                 f"Menor preço atual: {formatar_reais(menor['preco'])}\n"
                 f"Seu alvo: {formatar_reais(alvo)}\n"
                 f"Diferença: {diff_formatada}\n"
-                f"Frete: {status_frete}\n"
                 f"Link: {menor['link']}\n"
             )
         else:
-            # AINDA ACIMA DO ALVO (diferença positiva)
             resumo_status.append(
                 f"• *{prod['nome']}*\n"
                 f"  Menor atual: *{formatar_reais(menor['preco'])}* | Alvo: {formatar_reais(alvo)}\n"
                 f"  Diferença: *{diff_formatada}* (acima do alvo)\n"
-                f"  🔗 [Ver menor anúncio]({menor['link']})"
+                f"  🔗 [Ver menor preço]({menor['link']})"
             )
 
-    # Dispara o e-mail consolidado se algum item atingiu a meta
     if blocos_email_urgente:
         qtd = len(blocos_email_urgente)
         enviar_email(
@@ -178,7 +237,6 @@ if __name__ == "__main__":
             "O robô encontrou oferta(s) no seu preço alvo ou abaixo:\n\n" + "\n".join(blocos_email_urgente),
         )
 
-    # Envia o boletim de acompanhamento no Telegram (nos disparos manuais ou às 09h e 20h)
     if enviar_status_periodico and resumo_status:
         msg_boletim = (
             f"📊 *Boletim de Preços ({AGORA_BR.strftime('%H:%M')})*\n\n"
