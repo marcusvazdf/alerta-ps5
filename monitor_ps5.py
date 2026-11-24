@@ -15,8 +15,13 @@ EMAIL_DESTINO = "marcusvaz.df@gmail.com"
 
 FUSO_BR = timezone(timedelta(hours=-3))
 AGORA_BR = datetime.now(FUSO_BR)
+DATA_HOJE = AGORA_BR.strftime("%Y-%m-%d")
+
 ARQUIVO_CONTROLE = "ultimo_boletim.txt"
 ARQUIVO_METAS = "metas_alertadas.json"
+ARQUIVO_MINIMA_DIA = "minima_diaria.json"
+
+CUSTO_LEITOR_AVULSO = 450.00
 
 HEADERS = {
     "User-Agent": (
@@ -37,6 +42,7 @@ FONTES = [
 
 PRODUTOS = [
     {
+        "id": "ps5_leitor",
         "nome": "PS5 Slim com Leitor 1TB",
         "query": "PlayStation 5 Slim 1TB com Leitor",
         "preco_min": 2800.00,
@@ -49,6 +55,7 @@ PRODUTOS = [
         ],
     },
     {
+        "id": "ps5_digital",
         "nome": "PS5 Slim Digital 825GB/1TB",
         "query": "PlayStation 5 Slim Digital",
         "preco_min": 2600.00,
@@ -61,6 +68,7 @@ PRODUTOS = [
         ],
     },
     {
+        "id": "ar_lg",
         "nome": "LG Dual Inverter Compact 9000 BTUs",
         "query": "Ar Condicionado LG Dual Inverter Compact 9000 BTUs",
         "preco_min": 1400.00,
@@ -98,6 +106,21 @@ def ler_metas_alertadas():
 
 def salvar_metas_alertadas(dados):
     with open(ARQUIVO_METAS, "w", encoding="utf-8") as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
+
+def ler_minima_diaria():
+    if os.path.exists(ARQUIVO_MINIMA_DIA):
+        try:
+            with open(ARQUIVO_MINIMA_DIA, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+                if dados.get("data") == DATA_HOJE:
+                    return dados
+        except Exception:
+            pass
+    return {"data": DATA_HOJE, "registros": {}}
+
+def salvar_minima_diaria(dados):
+    with open(ARQUIVO_MINIMA_DIA, "w", encoding="utf-8") as f:
         json.dump(dados, f, ensure_ascii=False, indent=2)
 
 def enviar_telegram(mensagem):
@@ -231,14 +254,53 @@ def analisar_produto(produto):
     erro_geral = "; ".join(erros) if (not ofertas_validas and len(erros) == len(FONTES)) else None
     return ofertas_validas, erro_geral
 
+def gerar_veredito_ps5(menores_atuais):
+    leitor = menores_atuais.get("ps5_leitor")
+    digital = menores_atuais.get("ps5_digital")
+
+    if not leitor or not digital:
+        return None
+
+    preco_leitor = leitor["preco"]
+    preco_digital = digital["preco"]
+    combo_digital = preco_digital + CUSTO_LEITOR_AVULSO
+    diferenca_combo = preco_leitor - combo_digital
+
+    if diferenca_combo > 0:
+        return (
+            f"⚖️ *Análise Digital + Leitor ({formatar_reais(CUSTO_LEITOR_AVULSO)}):*\n"
+            f"  • Combo Digital + Leitor: *{formatar_reais(combo_digital)}*\n"
+            f"  • Com Leitor de Fábrica: *{formatar_reais(preco_leitor)}*\n"
+            f"  ✅ *Veredito:* Vale a pena o *Digital + Leitor avulso* (economia de *{formatar_reais(diferenca_combo)}*)."
+        )
+    elif diferenca_combo < 0:
+        return (
+            f"⚖️ *Análise Digital + Leitor ({formatar_reais(CUSTO_LEITOR_AVULSO)}):*\n"
+            f"  • Combo Digital + Leitor: *{formatar_reais(combo_digital)}*\n"
+            f"  • Com Leitor de Fábrica: *{formatar_reais(preco_leitor)}*\n"
+            f"  ✅ *Veredito:* Melhor manter o *Com Leitor 1TB de fábrica* (sai *{formatar_reais(abs(diferenca_combo))}* mais barato e já vem com 1TB)."
+        )
+    else:
+        return (
+            f"⚖️ *Análise Digital + Leitor ({formatar_reais(CUSTO_LEITOR_AVULSO)}):*\n"
+            f"  • Ambos empatam em *{formatar_reais(preco_leitor)}*.\n"
+            f"  ✅ *Veredito:* Melhor manter o *Com Leitor 1TB de fábrica* pelo SSD maior."
+        )
+
 if __name__ == "__main__":
     blocos_email_urgente = []
     resumo_status = []
+    menores_atuais = {}
 
     chave_hora_atual = AGORA_BR.strftime("%Y-%m-%d-%H")
     ultimo_enviado = ler_ultimo_boletim()
+
     metas_alertadas = ler_metas_alertadas()
     metas_atualizadas = False
+
+    minima_diaria = ler_minima_diaria()
+    registros_dia = minima_diaria["registros"]
+    minima_atualizada = False
 
     dentro_janela_boletim = (6 <= AGORA_BR.hour <= 23) or (AGORA_BR.hour == 0)
     enviar_status_periodico = dentro_janela_boletim and (chave_hora_atual != ultimo_enviado)
@@ -246,6 +308,7 @@ if __name__ == "__main__":
     for prod in PRODUTOS:
         ofertas, erro = analisar_produto(prod)
         alvo = prod["preco_alvo"]
+        prod_id = prod["id"]
 
         if erro:
             resumo_status.append(f"• *{prod['nome']}:* {erro}")
@@ -258,12 +321,29 @@ if __name__ == "__main__":
             continue
 
         menor = ofertas[0]
+        menores_atuais[prod_id] = menor
+
+        # Atualiza o menor preço do dia se for o primeiro registro ou um novo recorde de baixa hoje
+        reg_atual = registros_dia.get(prod_id)
+        if reg_atual is None or menor["preco"] < reg_atual["preco"]:
+            registros_dia[prod_id] = {
+                "preco": menor["preco"],
+                "fonte": menor["fonte"],
+                "hora": AGORA_BR.strftime("%H:%M"),
+            }
+            minima_atualizada = True
+
+        recorde_dia = registros_dia[prod_id]
+        texto_recorde_dia = (
+            f"📉 Menor do dia: *{formatar_reais(recorde_dia['preco'])}* "
+            f"({recorde_dia['fonte']} às {recorde_dia['hora']})"
+        )
+
         diferenca = menor["preco"] - alvo
         sinal = "+" if diferenca > 0 else "-"
         diff_formatada = f"{sinal} {formatar_reais(abs(diferenca))}"
 
         if diferenca <= 0:
-            # Só dispara alerta urgente/e-mail se ainda não alertou esse preço (ou se caiu mais ainda)
             chave_prod = prod["nome"]
             ultimo_preco_alertado = metas_alertadas.get(chave_prod)
 
@@ -291,8 +371,14 @@ if __name__ == "__main__":
                     f"Diferença: {diff_formatada}\n"
                     f"Link: {menor['link']}\n"
                 )
+
+            resumo_status.append(
+                f"• *{prod['nome']}* ✅ *NO ALVO!*\n"
+                f"  Menor atual: *{formatar_reais(menor['preco'])}* ({menor['fonte']}) | Alvo: {formatar_reais(alvo)}\n"
+                f"  {texto_recorde_dia}\n"
+                f"  🔗 [Ver menor preço]({menor['link']})"
+            )
         else:
-            # Se o preço voltou a subir acima da meta, limpa a trava para alertar caso caia de novo
             if prod["nome"] in metas_alertadas:
                 del metas_alertadas[prod["nome"]]
                 metas_atualizadas = True
@@ -301,11 +387,15 @@ if __name__ == "__main__":
                 f"• *{prod['nome']}*\n"
                 f"  Menor atual: *{formatar_reais(menor['preco'])}* ({menor['fonte']}) | Alvo: {formatar_reais(alvo)}\n"
                 f"  Diferença: *{diff_formatada}* (acima do alvo)\n"
+                f"  {texto_recorde_dia}\n"
                 f"  🔗 [Ver menor preço]({menor['link']})"
             )
 
     if metas_atualizadas:
         salvar_metas_alertadas(metas_alertadas)
+
+    if minima_atualizada or not os.path.exists(ARQUIVO_MINIMA_DIA):
+        salvar_minima_diaria(minima_diaria)
 
     if blocos_email_urgente:
         qtd = len(blocos_email_urgente)
@@ -315,6 +405,10 @@ if __name__ == "__main__":
         )
 
     if enviar_status_periodico and resumo_status:
+        veredito = gerar_veredito_ps5(menores_atuais)
+        if veredito:
+            resumo_status.append(veredito)
+
         msg_boletim = (
             f"📊 *Boletim de Preços ({AGORA_BR.strftime('%H:%M')})*\n\n"
             + "\n\n".join(resumo_status)
