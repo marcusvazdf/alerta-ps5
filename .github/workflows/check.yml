@@ -17,10 +17,9 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         run: python monitor_ps5.py
-      - name: Salvar controle do boletim horário
+      - name: Salvar controle do boletim e metas
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ultimo_boletim.txt || true
-          git diff --staged --quiet || git commit -m "Atualiza hora do último boletim"
-          git push
+          git add ultimo_boletim.txt metas_alertadas.json || true
+          git diff --staged --quiet || (git commit -m "Atualiza controle do boletim e metas" && git pull --rebase && git push)
