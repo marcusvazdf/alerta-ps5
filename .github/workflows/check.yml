@@ -27,7 +27,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ultimo_boletim.txt metas_alertadas.json minima_diaria.json || true
+          git add -A
           if ! git diff --staged --quiet; then
             git commit -m "Atualiza controle do boletim, metas e minima diaria"
             git pull --rebase -X ours || true
