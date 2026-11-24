@@ -16,6 +16,7 @@ EMAIL_DESTINO = "marcusvaz.df@gmail.com"
 FUSO_BR = timezone(timedelta(hours=-3))
 AGORA_BR = datetime.now(FUSO_BR)
 ARQUIVO_CONTROLE = "ultimo_boletim.txt"
+ARQUIVO_METAS = "metas_alertadas.json"
 
 HEADERS = {
     "User-Agent": (
@@ -42,7 +43,10 @@ PRODUTOS = [
         "preco_alvo": 3999.99,
         "obrigatorias": ["slim"],
         "alguma_de": ["leitor", "disk", "disco", "1tb"],
-        "proibidas": ["digital", "controle", "dualsense", "cabo", "suporte", "capa", "jogo", "usado"],
+        "proibidas": [
+            "digital", "sem leitor", "controle", "dualsense",
+            "cabo", "suporte", "capa", "usado", "reembalado"
+        ],
     },
     {
         "nome": "PS5 Slim Digital 825GB/1TB",
@@ -50,8 +54,11 @@ PRODUTOS = [
         "preco_min": 2600.00,
         "preco_alvo": 3550.00,
         "obrigatorias": ["slim", "digital"],
-        "alguma_de": ["825gb", "1tb", "console", "playstation"],
-        "proibidas": ["controle", "dualsense", "cabo", "suporte", "capa", "jogo", "usado"],
+        "alguma_de": ["825gb", "1tb", "console", "playstation", "ps5"],
+        "proibidas": [
+            "com leitor", "controle", "dualsense", "cabo",
+            "suporte", "capa", "usado", "reembalado"
+        ],
     },
     {
         "nome": "LG Dual Inverter Compact 9000 BTUs",
@@ -79,6 +86,19 @@ def ler_ultimo_boletim():
 def salvar_ultimo_boletim(chave_hora):
     with open(ARQUIVO_CONTROLE, "w", encoding="utf-8") as f:
         f.write(chave_hora)
+
+def ler_metas_alertadas():
+    if os.path.exists(ARQUIVO_METAS):
+        try:
+            with open(ARQUIVO_METAS, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def salvar_metas_alertadas(dados):
+    with open(ARQUIVO_METAS, "w", encoding="utf-8") as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
 
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -217,6 +237,8 @@ if __name__ == "__main__":
 
     chave_hora_atual = AGORA_BR.strftime("%Y-%m-%d-%H")
     ultimo_enviado = ler_ultimo_boletim()
+    metas_alertadas = ler_metas_alertadas()
+    metas_atualizadas = False
 
     dentro_janela_boletim = (6 <= AGORA_BR.hour <= 23) or (AGORA_BR.hour == 0)
     enviar_status_periodico = dentro_janela_boletim and (chave_hora_atual != ultimo_enviado)
@@ -241,33 +263,49 @@ if __name__ == "__main__":
         diff_formatada = f"{sinal} {formatar_reais(abs(diferenca))}"
 
         if diferenca <= 0:
-            msg_tg = (
-                f"🚨 *META ATINGIDA: {prod['nome']}*\n\n"
-                f"📦 *Anúncio:* {menor['titulo']} ({menor['fonte']})\n"
-                f"💰 *Menor preço atual:* {formatar_reais(menor['preco'])}\n"
-                f"🎯 *Seu alvo:* {formatar_reais(alvo)}\n"
-                f"📉 *Diferença:* *{diff_formatada}* (abaixo do alvo!)\n"
-                f"🔗 [Ver lojas e ofertas]({menor['link']})"
-            )
-            enviar_telegram(msg_tg)
+            # Só dispara alerta urgente/e-mail se ainda não alertou esse preço (ou se caiu mais ainda)
+            chave_prod = prod["nome"]
+            ultimo_preco_alertado = metas_alertadas.get(chave_prod)
 
-            blocos_email_urgente.append(
-                f"========================================\n"
-                f"META ATINGIDA: {prod['nome']}\n"
-                f"Fonte: {menor['fonte']}\n"
-                f"Anúncio: {menor['titulo']}\n"
-                f"Menor preço atual: {formatar_reais(menor['preco'])}\n"
-                f"Seu alvo: {formatar_reais(alvo)}\n"
-                f"Diferença: {diff_formatada}\n"
-                f"Link: {menor['link']}\n"
-            )
+            if ultimo_preco_alertado is None or menor["preco"] < ultimo_preco_alertado:
+                metas_alertadas[chave_prod] = menor["preco"]
+                metas_atualizadas = True
+
+                msg_tg = (
+                    f"🚨 *META ATINGIDA: {prod['nome']}*\n\n"
+                    f"📦 *Anúncio:* {menor['titulo']} ({menor['fonte']})\n"
+                    f"💰 *Menor preço atual:* {formatar_reais(menor['preco'])}\n"
+                    f"🎯 *Seu alvo:* {formatar_reais(alvo)}\n"
+                    f"📉 *Diferença:* *{diff_formatada}* (abaixo do alvo!)\n"
+                    f"🔗 [Ver lojas e ofertas]({menor['link']})"
+                )
+                enviar_telegram(msg_tg)
+
+                blocos_email_urgente.append(
+                    f"========================================\n"
+                    f"META ATINGIDA: {prod['nome']}\n"
+                    f"Fonte: {menor['fonte']}\n"
+                    f"Anúncio: {menor['titulo']}\n"
+                    f"Menor preço atual: {formatar_reais(menor['preco'])}\n"
+                    f"Seu alvo: {formatar_reais(alvo)}\n"
+                    f"Diferença: {diff_formatada}\n"
+                    f"Link: {menor['link']}\n"
+                )
         else:
+            # Se o preço voltou a subir acima da meta, limpa a trava para alertar caso caia de novo
+            if prod["nome"] in metas_alertadas:
+                del metas_alertadas[prod["nome"]]
+                metas_atualizadas = True
+
             resumo_status.append(
                 f"• *{prod['nome']}*\n"
                 f"  Menor atual: *{formatar_reais(menor['preco'])}* ({menor['fonte']}) | Alvo: {formatar_reais(alvo)}\n"
                 f"  Diferença: *{diff_formatada}* (acima do alvo)\n"
                 f"  🔗 [Ver menor preço]({menor['link']})"
             )
+
+    if metas_atualizadas:
+        salvar_metas_alertadas(metas_alertadas)
 
     if blocos_email_urgente:
         qtd = len(blocos_email_urgente)
