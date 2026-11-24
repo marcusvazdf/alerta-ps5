@@ -5,7 +5,13 @@ import re
 import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
-import requests
+
+try:
+    from curl_cffi import requests as http_client
+    USANDO_CURL_CFFI = True
+except ImportError:
+    import requests as http_client
+    USANDO_CURL_CFFI = False
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -27,17 +33,41 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/129.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-FONTES = [
+FONTES_COMPARADORES = [
     ("Buscapé", "https://www.buscape.com.br"),
     ("Zoom", "https://www.zoom.com.br"),
     ("Bondfaro", "https://www.bondfaro.com.br"),
     ("JáCotei", "https://www.jacotei.com.br"),
+]
+
+# Links diretos fornecidos para leitura em tempo real (com checagem de estoque)
+LINKS_DIRETOS_PS5_LEITOR = [
+    {
+        "loja": "Mercado Livre (Oficial PS)",
+        "titulo": "PS5 Slim Disk + Astro Bot e GT7 (ML Oficial)",
+        "url": "https://www.mercadolivre.com.br/console-playstation5-slim-disk-pacote-astro-bot-e-gran-turismo-7/p/MLB57083347?pdp_filters=official_store%3Aall",
+    },
+    {
+        "loja": "Amazon BR",
+        "titulo": "PlayStation 5 Slim com Leitor (Amazon)",
+        "url": "https://www.amazon.com.br/dp/B0F8R9NDXC?psc=1",
+    },
+    {
+        "loja": "Magalu",
+        "titulo": "PS5 Slim Disk 1TB (Magalu)",
+        "url": "https://www.magazineluiza.com.br/console-playstation-5-slim-disk-1tb-fisico-com-controle-dualsense-branco-sony/p/ch30jc3c3j/ga/pltt/",
+    },
+    {
+        "loja": "Carrefour",
+        "titulo": "PS5 Slim Disk + Astro Bot e GT7 (Carrefour)",
+        "url": "https://www.carrefour.com.br/produto/console-playstation-5-slim-disk-pacote-astro-bot-e-gran-turismo-7-336324400",
+    },
 ]
 
 PRODUTOS = [
@@ -81,6 +111,11 @@ PRODUTOS = [
         ],
     },
 ]
+
+def fazer_get(url, timeout=20):
+    if USANDO_CURL_CFFI:
+        return http_client.get(url, headers=HEADERS, impersonate="chrome124", timeout=timeout)
+    return http_client.get(url, headers=HEADERS, timeout=timeout)
 
 def formatar_reais(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -131,7 +166,10 @@ def enviar_telegram(mensagem):
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
-    requests.post(url, json=payload, timeout=10)
+    if USANDO_CURL_CFFI:
+        http_client.post(url, json=payload, timeout=10)
+    else:
+        http_client.post(url, json=payload, timeout=10)
 
 def enviar_email(assunto, corpo):
     if not EMAIL_USER or not EMAIL_PASS:
@@ -144,6 +182,106 @@ def enviar_email(assunto, corpo):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as servidor:
         servidor.login(EMAIL_USER, EMAIL_PASS)
         servidor.send_message(msg)
+
+def extrair_ld_json_ofertas(html):
+    precos_disponiveis = []
+    esgotado_explicitamente = False
+
+    for match_ld in re.findall(r'<script type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL):
+        try:
+            dados = json.loads(match_ld)
+        except json.JSONDecodeError:
+            continue
+
+        pilha = [dados]
+        while pilha:
+            atual = pilha.pop()
+            if isinstance(atual, dict):
+                offers = atual.get("offers")
+                if isinstance(offers, dict):
+                    offers = [offers]
+                if isinstance(offers, list):
+                    for of in offers:
+                        if not isinstance(of, dict):
+                            continue
+                        avail = str(of.get("availability", "")).lower()
+                        if "outofstock" in avail or "soldout" in avail or "discontinued" in avail:
+                            esgotado_explicitamente = True
+                            continue
+                        val = of.get("lowPrice") or of.get("price")
+                        if val is not None:
+                            try:
+                                p = float(str(val).replace(",", "."))
+                                if p > 0:
+                                    precos_disponiveis.append(p)
+                            except ValueError:
+                                pass
+                for v in atual.values():
+                    if isinstance(v, (dict, list)):
+                        pilha.append(v)
+            elif isinstance(atual, list):
+                pilha.extend(atual)
+
+    return precos_disponiveis, esgotado_explicitamente
+
+def consultar_links_diretos(preco_min):
+    resultados = []
+
+    for item in LINKS_DIRETOS_PS5_LEITOR:
+        loja = item["loja"]
+        url = item["url"]
+        try:
+            resp = fazer_get(url, timeout=20)
+            if resp.status_code != 200:
+                continue
+
+            html = resp.text
+            html_lower = html.lower()
+
+            # 1. Tenta extrair via JSON-LD estruturado (funciona em ML, Magalu, Carrefour e parte da Amazon)
+            precos_ld, esgotado_ld = extrair_ld_json_ofertas(html)
+            precos_validos = [p for p in precos_ld if preco_min <= p <= 7500.0]
+
+            # 2. Regras específicas por loja caso o JSON-LD não traga o preço à vista
+            if not precos_validos:
+                if "amazon.com.br" in url:
+                    if "não disponível" in html_lower or "indisponível" in html_lower:
+                        continue
+                    # Preço principal no box da Amazon
+                    m_amz = re.search(r'"priceAmount"\s*:\s*(\d+\.\d{2})', html)
+                    if m_amz:
+                        p = float(m_amz.group(1))
+                        if preco_min <= p <= 7500.0:
+                            precos_validos.append(p)
+
+                elif "mercadolivre.com.br" in url:
+                    if "publicação pausada" in html_lower or "anúncio pausado" in html_lower or "estoque esgotado" in html_lower:
+                        continue
+                    for m_ml in re.findall(r'"price"\s*:\s*(\d+(?:\.\d{1,2})?)', html):
+                        p = float(m_ml)
+                        if preco_min <= p <= 7500.0:
+                            precos_validos.append(p)
+
+                elif "magazineluiza.com.br" in url or "carrefour.com.br" in url:
+                    if "produto indisponível" in html_lower or "esgotado" in html_lower and "avise-me" in html_lower:
+                        continue
+                    for m_gen in re.findall(r'"(?:bestPrice|pixPrice|spotPrice|price)"\s*:\s*"?(\d+(?:\.\d{1,2})?)"?', html):
+                        p = float(m_gen)
+                        if preco_min <= p <= 7500.0:
+                            precos_validos.append(p)
+
+            if precos_validos:
+                menor_loja = min(precos_validos)
+                resultados.append({
+                    "titulo": item["titulo"],
+                    "preco": menor_loja,
+                    "link": url,
+                    "fonte": f"Direto • {loja}",
+                })
+        except Exception as erro:
+            print(f"Erro leitura direta ({loja}): {erro}")
+
+    return resultados
 
 def extrair_produtos_json(obj, encontrados, base_url, nome_fonte):
     if isinstance(obj, dict):
@@ -190,10 +328,10 @@ def analisar_produto(produto):
     brutos = []
     erros = []
 
-    for nome_fonte, base_url in FONTES:
+    for nome_fonte, base_url in FONTES_COMPARADORES:
         url = f"{base_url}/search?q={q_encoded}"
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp = fazer_get(url, timeout=20)
             if resp.status_code != 200:
                 erros.append(f"{nome_fonte}: HTTP {resp.status_code}")
                 continue
@@ -250,8 +388,13 @@ def analisar_produto(produto):
             "fonte": item["fonte"],
         })
 
+    # Se for o PS5 Slim com Leitor, soma também a leitura direta nos 4 links oficiais
+    if produto["id"] == "ps5_leitor":
+        diretas = consultar_links_diretos(produto["preco_min"])
+        ofertas_validas.extend(diretas)
+
     ofertas_validas.sort(key=lambda x: x["preco"])
-    erro_geral = "; ".join(erros) if (not ofertas_validas and len(erros) == len(FONTES)) else None
+    erro_geral = "; ".join(erros) if (not ofertas_validas and len(erros) == len(FONTES_COMPARADORES)) else None
     return ofertas_validas, erro_geral
 
 def gerar_veredito_ps5(menores_atuais):
@@ -323,7 +466,6 @@ if __name__ == "__main__":
         menor = ofertas[0]
         menores_atuais[prod_id] = menor
 
-        # Atualiza o menor preço do dia se for o primeiro registro ou um novo recorde de baixa hoje
         reg_atual = registros_dia.get(prod_id)
         if reg_atual is None or menor["preco"] < reg_atual["preco"]:
             registros_dia[prod_id] = {
