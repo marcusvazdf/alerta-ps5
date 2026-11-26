@@ -1,20 +1,20 @@
 {
-  "data": "2026-11-25",
+  "data": "2026-11-26",
   "registros": {
     "ps5_leitor": {
-      "preco": 2894.06,
+      "preco": 4699.9,
       "fonte": "Buscapé",
-      "hora": "19:25"
+      "hora": "00:00"
     },
     "ps5_digital": {
-      "preco": 4179.05,
+      "preco": 4369.05,
       "fonte": "Buscapé",
-      "hora": "05:25"
+      "hora": "00:00"
     },
     "ar_lg": {
       "preco": 1959.0,
       "fonte": "Buscapé",
-      "hora": "17:50"
+      "hora": "00:00"
     }
   }
 }
