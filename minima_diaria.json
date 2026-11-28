@@ -1,4 +1,20 @@
 {
   "date": "2026-11-28",
-  "items": {}
+  "items": {
+    "leitor_ps5": {
+      "price": 649.0,
+      "time": "11:12",
+      "source": "Buscapé"
+    },
+    "ssd_1tb": {
+      "price": 2133.47,
+      "time": "11:12",
+      "source": "Buscapé"
+    },
+    "ssd_2tb": {
+      "price": 3014.99,
+      "time": "11:12",
+      "source": "Buscapé"
+    }
+  }
 }
