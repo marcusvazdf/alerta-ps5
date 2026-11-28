@@ -5,15 +5,14 @@ from curl_cffi import requests
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-STATE_FILE = "sent_alerts.json"
+STATE_FILE = "metas_alertadas.json"
 
-# Configuração das buscas e tetos de preço (ajuste conforme sua meta)
 TARGETS = [
     {
         "name": "Leitor de Disco PS5 Slim (CFI-2000)",
         "query": "leitor de disco ps5 slim sony",
         "max_price": 620.00,
-        "min_price": 420.00,  # Evita capas, cabos e suportes baratos
+        "min_price": 420.00,
         "must_include_any": ["leitor", "unidade de disco", "drive", "cfi-2000", "cfi-zdd1"],
         "must_exclude": ["base", "suporte", "capa", "cooler", "adesivo", "cabo", "usado", "defeito", "carcaca"]
     },
@@ -21,7 +20,7 @@ TARGETS = [
         "name": "SSD NVMe 1TB PS5 (7000+ MB/s)",
         "query": "ssd nvme 1tb pcie 4.0 ps5",
         "max_price": 650.00,
-        "min_price": 380.00,  # Evita SSDs falsos ou só o dissipador avulso
+        "min_price": 380.00,
         "must_include_any": ["kc3000", "fury renegade", "s70 blade", "sn850", "980 pro", "990 pro", "mp600"],
         "must_exclude": ["500gb", "512gb", "256gb", "sata", "case", "adaptador", "usado", "dissipador apenas"]
     },
@@ -40,7 +39,8 @@ def load_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
         except Exception:
             return {}
     return {}
@@ -96,8 +96,7 @@ def search_mercadolivre(target):
             timeout=20
         )
         resp.raise_for_status()
-        data = resp.json()
-        return data.get("results", [])
+        return resp.json().get("results", [])
     except Exception as e:
         print(f"Erro na busca '{target['name']}': {e}")
         return []
@@ -118,7 +117,6 @@ def main():
             if not is_valid_item(title, price, target):
                 continue
 
-            # Gera chave única por anúncio + faixa de preço (arredondada a cada R$ 10)
             price_bucket = int(price // 10)
             alert_key = hashlib.md5(f"{item_id}_{price_bucket}".encode()).hexdigest()
 
