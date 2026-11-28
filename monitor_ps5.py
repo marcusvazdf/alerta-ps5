@@ -145,7 +145,6 @@ def main():
 
             valid_items.append((price, title, permalink, item_id, item))
 
-            # Alerta imediato se bater ou ficar abaixo do alvo
             if price <= target["target_price"]:
                 price_bucket = int(price // 10)
                 alert_key = hashlib.md5(f"{item_id}_{price_bucket}".encode()).hexdigest()
@@ -170,7 +169,6 @@ def main():
         best_price, best_title, best_link, _, _ = valid_items[0]
         best_prices[target["id"]] = best_price
 
-        # Atualiza mínima do dia
         day_record = minima_data["items"].get(target["id"])
         if not day_record or best_price < day_record["price"]:
             day_record = {"price": best_price, "time": time_str}
@@ -191,7 +189,6 @@ def main():
         )
         resumo_hash_input += f"{target['id']}:{int(best_price)};"
 
-    # Comparativo custo-benefício 1TB vs 2TB
     if "ssd_1tb" in best_prices and "ssd_2tb" in best_prices:
         p1 = best_prices["ssd_1tb"]
         p2 = best_prices["ssd_2tb"]
@@ -209,7 +206,6 @@ def main():
     save_json(STATE_FILE, state)
     save_json(MINIMA_FILE, minima_data)
 
-    # Envia o boletim sempre que você rodar manualmente OU quando o menor preço mudar
     current_hash = hashlib.md5(resumo_hash_input.encode()).hexdigest()
     last_hash = ""
     if os.path.exists(BOLETIM_FILE):
