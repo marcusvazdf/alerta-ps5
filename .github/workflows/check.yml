@@ -2,7 +2,6 @@ name: Monitor Precos PS5 Acessorios
 
 on:
   schedule:
-    # Roda a cada 30 minutos
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
@@ -30,12 +29,12 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python monitor.py
+        run: python monitor_ps5.py
 
       - name: Salvar histórico de alertas enviados
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
-          git add sent_alerts.json || true
+          git add metas_alertadas.json || true
           git diff --staged --quiet || git commit -m "chore: update sent alerts"
           git push
